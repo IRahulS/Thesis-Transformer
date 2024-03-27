@@ -4,8 +4,9 @@ import torch.backends.cudnn as cudnn
 from evaluation import compute_rmse, compute_sad
 from utils import print_args, SparseLoss, NonZeroClipper, MinVolumn
 from data_loader import set_loader
-from model import Init_Weights, MUNet
-
+from model import Init_Weights, MUNet,AutoEncoder,MFT
+import plots
+import utils
 import matplotlib.pyplot as plt
 import scipy.io as sio
 import numpy as np
@@ -17,25 +18,25 @@ import os
 parser = argparse.ArgumentParser()
 parser.add_argument('--fix_random', action='store_true', help='fix randomness')
 parser.add_argument('--seed', default=0, type=int)
-parser.add_argument('--gpu_id', default='0,1,2', help='gpu id')
+parser.add_argument('--gpu_id', default='0', help='gpu id')
 parser.add_argument('--batch_size', default=128, type=int, help='batch size')
 parser.add_argument('--patch', default=1, type=int, help='input data size')
-parser.add_argument('--learning_rate_en', default=3e-4, type=float, help='learning rate of encoder')
-parser.add_argument('--learning_rate_de', default=1e-4, type=float, help='learning rate of decoder')
+parser.add_argument('--learning_rate_en', default=1e-4, type=float, help='learning rate of encoder')
+parser.add_argument('--learning_rate_de', default=5e-4, type=float, help='learning rate of decoder')
 parser.add_argument('--weight_decay', default=1e-5, type=float, help='network parameter regularization')
-parser.add_argument('--lamda', default=0, type=float, help='sparse regularization')
+parser.add_argument('--lamda', default=8e-2, type=float, help='sparse regularization')
 parser.add_argument('--reduction', default=2, type=int, help='squeeze reduction')
-parser.add_argument('--delta', default=0, type=float, help='delta coefficient')
+parser.add_argument('--delta', default=0.5, type=float, help='delta coefficient')
 parser.add_argument('--gamma', default=0.8, type=float, help='learning rate decay')
-parser.add_argument('--epoch', default=200, type=int, help='number of epoch')
-parser.add_argument('--dataset', choices=['muffle','houston170'], default='muffle', help='dataset to use')
+parser.add_argument('--epoch', default=40, type=int, help='number of epoch')
+parser.add_argument('--dataset', choices=['muffle','houston170'], default='houston170', help='dataset to use')
 args = parser.parse_args()
 
 
 if __name__ == '__main__':
 
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu_id)
-    torch.cuda.set_device(2)
+    # torch.cuda.set_device(2)
 
     if torch.cuda.is_available():
         print ('GPU is true')
@@ -65,6 +66,16 @@ if __name__ == '__main__':
 
     # create dataset and model
     train_loaders, test_loaders, label, M_init, M_true, num_classes, band, col, row, ldr_dim = set_loader(args)
+
+    # adding Transformer
+    
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    
+    # net = AutoEncoder(P=num_classes, L=band, size=col,
+    #                       patch=args.patch, dim=5,ldr_dim=ldr_dim, reduction=args.reduction).cuda()
+
+    # net=CrossHL_Transformer(FM=16, NC=64, NCLidar=5, Classes=num_classes,patchsize = args.patch).cuda()
+
     net = MUNet(band, num_classes, ldr_dim, args.reduction).cuda()
     
     # initialize net parameters and endmembers
@@ -97,14 +108,16 @@ if __name__ == '__main__':
     for epoch in range(args.epoch):
         for i, traindata in enumerate(train_loaders):        
             net.train()
-
-            x, y = traindata       
+            x, y = traindata 
             x = x.cuda()
             y = y.cuda()
-            
-            abu, output = net(x,y)            
+            beta=5e3
+            abu, output = net(x,y) 
+              
+              
             output = torch.reshape(output, (output.shape[0], band))
-            x = torch.reshape(x, (output.shape[0], band))
+            x = torch.reshape(x, (x.shape[0], band))
+
 
             # reconstruction loss
             MSE_loss = torch.mean(torch.acos(torch.sum(x * output, dim=1)/
@@ -116,7 +129,7 @@ if __name__ == '__main__':
             MSE_loss.backward()
             nn.utils.clip_grad_norm_(net.parameters(), max_norm=10, norm_type=1) 
             optimizer.step()
-            net.decoder.apply(apply_nonegative)    
+            net.decoder.apply(apply_nonegative) 
         
         if epoch % 1 == 0:
             print('Epoch: {:d} | Train Unmix Loss: {:.5f} | RE Loss: {:.5f} | Sparsity Loss: {:.5f} | Minvol: {:.5f}'
@@ -126,9 +139,10 @@ if __name__ == '__main__':
                 x, y = testdata
                 x = x.cuda()
                 y = y.cuda()
-            
+                
                 abu_est, output = net(x, y)
- 
+                
+    
             abu_est = torch.reshape(abu_est.squeeze(-1).permute(2,1,0), (num_classes,row,col)).permute(0,2,1).cpu().data.numpy()
             edm_result = torch.reshape(net.decoder[0].weight, (band,num_classes)).cpu().data.numpy()           
             print('RMSE: {:.5f} | SAD: {:.5f}'.format(compute_rmse(abu_est[position,:,:],label), compute_sad(M_true, edm_result[:,position])))
@@ -143,8 +157,10 @@ if __name__ == '__main__':
         x, y = testdata
         x = x.cuda()
         y = y.cuda()
-
+        
         abu, output = net(x, y)
+
+        
 
     # compute metric
     abu_est = torch.reshape(abu.squeeze(-1).permute(2,1,0), (num_classes,row,col)).permute(0,2,1).cpu().data.numpy()
@@ -167,9 +183,15 @@ if __name__ == '__main__':
         plt.subplot(2, num_classes, i+1+num_classes)
         plt.imshow(label[i,:,:])
     plt.show()
+    
 
     # print hyperparameter setting and save result 
     print_args(vars(args))
     save_path = str(args.dataset) + '_result.mat'
     sio.savemat(save_path, {'abu_est':abu_est.T, 'M_est':edm_result})
-
+    
+    save_dir = "trans_mod_" + args.dataset + "/"
+    os.makedirs(save_dir, exist_ok=True)
+    plots.plot_abundance(abu_est, label, num_classes, save_dir)
+    plots.plot_endmembers(M_true, edm_result, num_classes, save_dir)
+        

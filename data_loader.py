@@ -2,10 +2,32 @@ import torch
 import torch.utils.data as Data
 import numpy as np
 import scipy.io as sio
+import torchvision.transforms as transforms
+
+class TrainData(torch.utils.data.Dataset):
+    def __init__(self, img, target, transform=None, target_transform=None):
+        
+        self.img = img.float()
+        self.target = target.float()
+        self.transform = transform
+        self.target_transform = target_transform
+
+    def __getitem__(self, index):
+        img, target = self.img[index], self.target[index]
+        if self.transform:
+            img = self.transform(img)
+        if self.target_transform:
+            target = self.target_transform(target)
+
+        return img, target
+
+    def __len__(self):
+        return len(self.img)
 
 def set_loader(args):
+    
     if args.dataset == 'muffle':
-        image_file = r'./data/muffle_dataset_130_90.mat'
+        image_file = r'./data/muffle_dataset.mat'
         num_classes = 5
         band = 64
         col = 90
@@ -31,6 +53,7 @@ def set_loader(args):
     M_true = input_data['M']
 
     mirror_image, mirror_lidar = mirror_hsi(row, col, band, lidar.shape[2], image, lidar, args.patch) 
+    
 
     train_point = []
     x_train = np.zeros((row*col, args.patch, args.patch, band), dtype=float)
@@ -41,10 +64,14 @@ def set_loader(args):
     for k in range(len(train_point)):
         x_train[k,:,:,:] = gain_neighborhood_pixel(mirror_image, train_point, k, args.patch)
         y_train[k,:,:,:] = gain_neighborhood_pixel(mirror_lidar, train_point, k, args.patch)
-        
+
     x_train = torch.from_numpy(x_train.transpose(0,3,1,2)).type(torch.FloatTensor)
     y_train = torch.from_numpy(y_train.transpose(0,3,1,2)).type(torch.FloatTensor)
+
+    print(x_train.shape)
+    print(y_train.shape)
     Label_train = Data.TensorDataset(x_train, y_train)
+    
     label_train_loader = Data.DataLoader(Label_train, batch_size=args.batch_size, shuffle=True)
     
     x_test = torch.from_numpy(image.T).unsqueeze(0).float()
@@ -56,7 +83,7 @@ def set_loader(args):
 
     label_test_loader = Data.DataLoader(Label_train, batch_size=row*col, shuffle=False)
     return label_train_loader, label_test_loader, label, M_init, M_true, num_classes, band, col, row, lidar.shape[2]
-
+    # return input_data,label_train_loader,M_init
 
 def mirror_hsi(height, width, band, edm, input_normalize, label_normalize, patch):
     padding=patch//2
