@@ -41,7 +41,7 @@ class HetConv(nn.Module):
 
 # Cross-HL Attention Module
 class CrossHL_attention(nn.Module):
-    def __init__(self, dim, patches, num_heads=12, qkv_bias=False, qk_scale=None, attn_drop=0.1, proj_drop=0.1):
+    def __init__(self, dim, patches, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0.1, proj_drop=0.1):
         super().__init__()
         self.num_heads = num_heads
         head_dim = dim // num_heads
